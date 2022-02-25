@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, date
 import random
 import sqlite3
 from typing import Optional, List
-from datetime import date
 
+import numpy as np
+from pydantic import BaseModel, Field
 import plotly.express as px
 import pandas as pd
 import altair as alt
@@ -12,7 +13,7 @@ import streamlit_pydantic as sp
 
 from expenses import Expense, BaseExpense
 
-
+rng = np.random.default_rng(47)
 CHAR_LIMIT = 140
 DATABASE_URI = "expenses.db"
 # DATABASE_URI = ":memory:"
@@ -76,14 +77,14 @@ def seed_expenses_table(connection: sqlite3.Connection) -> None:
     """Insert a sample Expense row into the database"""
     st.warning("Seeding Expenses Table")
 
-    for i in range(100):
+    for i in range(200):
         seed_expense = Expense(
             rowid=i,
             purchased_date=date(
                 random.randint(2020, 2022), random.randint(1, 12), random.randint(1, 28)
             ).strftime("%Y-%m-%d"),
-            purchased_by=random.choice(["Gar", "Serena", "Mia"]),
-            price_in_cents=random.randint(1, 5_000_00),
+            purchased_by=random.choice(["Alice", "Bob", "Chuck"]),
+            price_in_cents=random.randint(50, 100_00),
         )
         seed_expense_query = f"""REPLACE into expenses(rowid, purchased_date, purchased_by, price_in_cents)
         VALUES(:rowid, :purchased_date, :purchased_by, :price_in_cents);"""
@@ -108,14 +109,44 @@ def execute_query(
 
 class ExpenseService:
     """Namespace for Database Related Expense Operations"""
+    def list_all_purchasers(connection: sqlite3.Connection) -> List[str]:
+        select_purchasers = "SELECT DISTINCT purchased_by FROM expenses"
+        expense_rows = execute_query(connection, select_purchasers)
+        return [x['purchased_by'] for x in expense_rows]
 
     def list_all_expenses(
         connection: sqlite3.Connection,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        selections: Optional[list[str]] = None,
     ) -> List[sqlite3.Row]:
         """Returns rows from all expenses. Ordered in reverse creation order"""
-        read_expenses_query = f"""SELECT rowid, purchased_date, purchased_by, price_in_cents
-        FROM expenses ORDER BY rowid DESC;"""
-        expense_rows = execute_query(connection, read_expenses_query)
+        select = "SELECT rowid, purchased_date, purchased_by, price_in_cents FROM expenses"
+        where = ""
+        do_and = True
+        kwargs = {}
+        if any(x is not None for x in (start_date, end_date, selections)):
+            where = "WHERE"
+        if start_date is not None:
+            where += " purchased_date >= :start_date"
+            kwargs['start_date'] = start_date
+            do_and = True
+        if end_date is not None:
+            if do_and:
+                where += " and"
+            where += " purchased_date <= :end_date"
+            kwargs['end_date'] = end_date
+            do_and = True
+        if selections is not None:
+            if do_and:
+                where += " and"
+            selection_map = {str(i): x for i, x in enumerate(selections)}
+            where += f" purchased_by IN ({','.join(':' + x for x in selection_map.keys())})"
+            kwargs.update(selection_map)
+
+        order_by = "ORDER BY purchased_date DESC;"
+        query = ' '.join((select, where, order_by))
+        expense_rows = execute_query(connection, query, kwargs)
         return expense_rows
 
     def create_expense(connection: sqlite3.Connection, expense: BaseExpense) -> None:
@@ -167,85 +198,26 @@ def render_create(connection: sqlite3.Connection) -> None:
     if data:
         do_create(connection, data)
 
-
-def fill_purchased_date(df: pd.DataFrame) -> pd.DataFrame:
-    df_dates = df.index.levels[df.index.names.index("purchased_date")]
-    min_date = df_dates.min()
-    max_date = df_dates.max()
-    all_dates = pd.date_range(min_date, max_date, freq="D")
-
-
 def prep_df_for_altair(df: pd.DataFrame) -> pd.DataFrame:
     return df.divide(100).reset_index().melt("purchased_date")
 
-
-def altair_multi_line_with_tooltips(df: pd.DataFrame) -> alt.Chart:
-    # https://altair-viz.github.io/gallery/multiline_tooltip.html
-    # Create a selection that chooses the nearest point & selects based on x-value
-    nearest = alt.selection(
-        type="single",
-        nearest=True,
-        on="mouseover",
-        fields=["purchased_date"],
-        empty="none",
-    )
-
-    # multi Line chart
-    cum_chart = (
-        alt.Chart(df)
-        .mark_line(interpolate="basis")
-        .encode(
-            x=alt.X("purchased_date:T", title="Date"),
-            y=alt.Y("value:Q", title="Total Dollars Spent"),
-            color="purchased_by:N",
-        )
-    )
-
-    # selectors for mouse
-    selectors = (
-        alt.Chart(df)
-        .mark_point()
-        .encode(x="purchased_date:T", opacity=alt.value(0))
-        .add_selection(nearest)
-    )
-
-    # Draw points on the line, and highlight based on selection
-    points = cum_chart.mark_point().encode(
-        opacity=alt.condition(nearest, alt.value(1), alt.value(0))
-    )
-
-    # Draw text labels near the points, and highlight based on selection
-    text = cum_chart.mark_text(align="left", dx=5, dy=-5).encode(
-        text=alt.condition(nearest, "value:Q", alt.value(" "))
-    )
-    date_text = cum_chart.mark_text(align="left", dx=5, dy=-20).encode(
-        text=alt.condition(nearest, "purchased_date:T", alt.value(" "))
-    )
-
-    # Draw a rule at the location of the selection
-    rules = (
-        alt.Chart(df)
-        .mark_rule(color="gray")
-        .encode(
-            x="purchased_date:T",
-        )
-        .transform_filter(nearest)
-    )
-
-    # Put the five layers into a chart and bind the data
-    return alt.layer(cum_chart, selectors, points, rules, text, date_text)
-
+@st.cache()
+def get_data(connection, start_date: date, end_date: date, selections: list[str]) -> pd.DataFrame:
+    expense_rows = ExpenseService.list_all_expenses(connection, start_date, end_date, selections)
+    expenses = [Expense(**row) for row in expense_rows]
+    return pd.DataFrame([x.dict() for x in expenses])
 
 def render_read(connection: sqlite3.Connection) -> None:
     """Show all of the expenses in the database in a feed"""
     st.success("Reading Expense Feed")
 
     render_create(connection)
-
+    purchasers = ExpenseService.list_all_purchasers(connection)
+    selections = st.multiselect("Show Spending For:", [*purchasers, 'All'], default=purchasers)
+    start_date = st.date_input("Start Date", value=date.today() - timedelta(days=30*6))
+    end_date = st.date_input("End Date", value=date.today())
     with st.expander("Show Raw Data"), st.echo():
-        expense_rows = ExpenseService.list_all_expenses(connection)
-        expenses = [Expense(**row) for row in expense_rows]
-        raw_df = pd.DataFrame([x.dict() for x in expenses])
+        raw_df = get_data(connection, start_date, end_date, selections)
         st.write(raw_df)
 
     with st.expander("Data Cleaning"), st.echo():
@@ -258,7 +230,8 @@ def render_read(connection: sqlite3.Connection) -> None:
         # Ignore multiindex that doesn't give much in this case
         pivot_df.columns = pivot_df.columns.droplevel(0)
         # Avoid doing summation with floats and money
-        pivot_df["All"] = pivot_df.sum(axis=1)
+        if 'All' in selections:
+            pivot_df["All"] = pivot_df.sum(axis=1)
 
         # Fill in date gaps
         min_date = pivot_df.index.min()
@@ -274,10 +247,10 @@ def render_read(connection: sqlite3.Connection) -> None:
         cum_df = prep_df_for_altair(cum_df)
 
         # Sum of each spender
-        totals = pivot_df.drop("All", axis=1).sum()
+        totals = pivot_df.sum()
         totals.index.name = "purchased_by"
         totals.name = "value"
-        totals = totals.reset_index()
+        totals = totals.div(100).reset_index()
 
         # 7 Day cumulative spending
         rolling_df = pivot_df.rolling(7, min_periods=1).sum()
@@ -286,7 +259,6 @@ def render_read(connection: sqlite3.Connection) -> None:
         # 30 Day daily maxes
         maxes_df = pivot_df.rolling(30, min_periods=1).max()
         maxes_df = prep_df_for_altair(maxes_df)
-
 
     totals_chart = (
         alt.Chart(totals)
@@ -310,34 +282,33 @@ def render_read(connection: sqlite3.Connection) -> None:
     st.header("Total Spending Per Person")
     st.altair_chart(totals_chart + totals_text, use_container_width=True)
 
+    spending_per_day = px.bar(spend_df, x='purchased_date', y='value',
+              color='purchased_by',
+             labels={'value':'Dollars spent per day'}, height=500)
+    st.plotly_chart(spending_per_day)
+
     st.header("Cumulative Spending Per Person")
-    options = cum_df.purchased_by.unique()
-    non_all_options = [x for x in options if x != 'All']
-    selections = st.multiselect("Show Spending For:", options, default=non_all_options)
+
     if selections:
-        fig = px.line(cum_df, x="purchased_date", y="value", color='purchased_by')
+        st.header("Cumulative Spending To Date")
+        multi_line = lambda x: px.line(x, x="purchased_date", y="value", color='purchased_by')
+        fig = multi_line(cum_df)
         st.plotly_chart(fig, use_container_width=True)
 
-        cum_chart = altair_multi_line_with_tooltips(
-            cum_df.loc[cum_df.purchased_by.isin(selections)]
-        )
-
-        st.header("Cumulative Spending To Date")
-        st.altair_chart(cum_chart, use_container_width=True)
-
-        rolling_chart = altair_multi_line_with_tooltips(rolling_df.loc[rolling_df.purchased_by.isin(selections)])
+        rolling_chart = multi_line(rolling_df)
         st.header("Weekly Spending Per Person")
-        st.altair_chart(rolling_chart, use_container_width=True)
+        st.plotly_chart(rolling_chart, use_container_width=True)
 
-        maxes_chart = altair_multi_line_with_tooltips(maxes_df.loc[maxes_df.purchased_by.isin(selections)])
+        maxes_chart = multi_line(maxes_df)
         st.header("Monthly Biggest Purchase Per Person")
-        st.altair_chart(maxes_chart, use_container_width=True)
+        st.plotly_chart(maxes_chart, use_container_width=True)
     else:
         st.warning("Select at least one person to see the charts")
 
+    expenses = ExpenseService.list_all_expenses(connection)
     st.header("Expense Feed")
     for expense in expenses:
-        render_expense(expense)
+        render_expense(Expense(**expense))
 
 
 def do_update(connection: sqlite3.Connection, new_expense: Expense) -> None:
