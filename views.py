@@ -1,4 +1,3 @@
-
 from datetime import date, datetime, timedelta, timezone
 import sqlite3
 
@@ -10,6 +9,7 @@ import streamlit as st
 import streamlit_pydantic as sp
 import plotly.graph_objects as go
 import plotly.express as px
+
 
 def display_timestamp(timestamp: int) -> datetime:
     """Return python datetime from utc timestamp"""
@@ -43,14 +43,21 @@ def render_create(connection: sqlite3.Connection) -> None:
     if data:
         do_create(connection, data)
 
+
 def prep_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
     return df.divide(100).reset_index().melt("purchased_date")
 
-@st.cache()
-def get_data(connection, start_date: date, end_date: date, selections: list[str]) -> pd.DataFrame:
-    expense_rows = ExpenseService.list_all_expenses(connection, start_date, end_date, selections)
+
+@st.cache(hash_funcs={sqlite3.Connection: id}, suppress_st_warning=True)
+def get_data(
+    connection, start_date: date, end_date: date, selections: list[str]
+) -> pd.DataFrame:
+    expense_rows = ExpenseService.list_all_expenses(
+        connection, start_date, end_date, selections
+    )
     expenses = [Expense(**row) for row in expense_rows]
     return pd.DataFrame([x.dict() for x in expenses])
+
 
 def render_read(connection: sqlite3.Connection) -> None:
     """Show all of the expenses in the database in a feed"""
@@ -58,8 +65,12 @@ def render_read(connection: sqlite3.Connection) -> None:
 
     render_create(connection)
     purchasers = ExpenseService.list_all_purchasers(connection)
-    selections = st.multiselect("Show Spending For:", [*purchasers, 'All'], default=purchasers)
-    start_date = st.date_input("Start Date", value=date.today() - timedelta(days=30*6))
+    selections = st.multiselect(
+        "Show Spending For:", [*purchasers, "All"], default=purchasers
+    )
+    start_date = st.date_input(
+        "Start Date", value=date.today() - timedelta(days=30 * 6)
+    )
     end_date = st.date_input("End Date", value=date.today())
     with st.expander("Show Raw Data"), st.echo():
         raw_df = get_data(connection, start_date, end_date, selections)
@@ -75,7 +86,7 @@ def render_read(connection: sqlite3.Connection) -> None:
         # Ignore multiindex that doesn't give much in this case
         pivot_df.columns = pivot_df.columns.droplevel(0)
         # Avoid doing summation with floats and money
-        if 'All' in selections:
+        if "All" in selections:
             pivot_df["All"] = pivot_df.sum(axis=1)
 
         # Fill in date gaps
@@ -90,7 +101,11 @@ def render_read(connection: sqlite3.Connection) -> None:
         # Cumulative spend over time for each person
         cum_df = pivot_df.cumsum()
         # Percent of contributions over time (ignore All)
-        cum_pct_df = cum_df[cum_df.columns.drop('All', errors='ignore')].divide(cum_df.sum(axis=1), axis=0).multiply(100)
+        cum_pct_df = (
+            cum_df[cum_df.columns.drop("All", errors="ignore")]
+            .divide(cum_df.sum(axis=1), axis=0)
+            .multiply(100)
+        )
 
         cum_df = prep_df_for_display(cum_df)
         cum_pct_df = cum_pct_df.reset_index().melt("purchased_date")
@@ -110,23 +125,38 @@ def render_read(connection: sqlite3.Connection) -> None:
         maxes_df = prep_df_for_display(maxes_df)
 
     st.header("Total Spending Per Person")
-    spending_per_person = px.bar(totals, x='value', y='purchased_by', color='purchased_by', labels={'purchased_by': 'Purchased By', 'value':'Total Dollars Spent'})
+    spending_per_person = px.bar(
+        totals,
+        x="value",
+        y="purchased_by",
+        color="purchased_by",
+        labels={"purchased_by": "Purchased By", "value": "Total Dollars Spent"},
+    )
     st.plotly_chart(spending_per_person, use_container_width=True)
 
     st.header("Percentage of Spending")
-    spending_pct = px.area(cum_pct_df, x='purchased_date', y='value', color='purchased_by')
+    spending_pct = px.area(
+        cum_pct_df, x="purchased_date", y="value", color="purchased_by"
+    )
     st.plotly_chart(spending_pct, use_container_width=True)
 
-    spending_per_day = px.bar(spend_df, x='purchased_date', y='value',
-              color='purchased_by',
-             labels={'value':'Dollars spent per day'}, height=500)
+    spending_per_day = px.bar(
+        spend_df,
+        x="purchased_date",
+        y="value",
+        color="purchased_by",
+        labels={"value": "Dollars spent per day"},
+        height=500,
+    )
     st.plotly_chart(spending_per_day)
 
     st.header("Cumulative Spending Per Person")
 
     if selections:
         st.header("Cumulative Spending To Date")
-        multi_line = lambda x: px.line(x, x="purchased_date", y="value", color='purchased_by')
+        multi_line = lambda x: px.line(
+            x, x="purchased_date", y="value", color="purchased_by"
+        )
         fig = multi_line(cum_df)
         st.plotly_chart(fig, use_container_width=True)
 
