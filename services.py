@@ -70,7 +70,7 @@ class ExpenseService:
             "SELECT rowid, purchased_date, purchased_by, price_in_cents FROM expenses"
         )
         where = ""
-        do_and = True
+        do_and = False
         kwargs = {}
         if any(x is not None for x in (start_date, end_date, selections)):
             where = "WHERE"
