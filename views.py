@@ -23,7 +23,7 @@ def utc_timestamp() -> int:
 
 def render_expense(expense: Expense) -> None:
     """Show a expense with streamlit display functions"""
-    st.subheader(f"By {expense.purchased_by} at {expense.purchased_date}")
+    st.subheader(f"{expense.comment} By {expense.purchased_by} at {expense.purchased_date}")
     st.caption(f"Expense #{expense.rowid}")
     st.write(f"{expense.price_in_cents / 100 :.2f}")
 
@@ -63,7 +63,7 @@ def render_read(connection: sqlite3.Connection) -> None:
     """Show all of the expenses in the database in a feed"""
     st.success("Reading Expense Feed")
 
-    render_create(connection)
+    # render_create(connection)
     purchasers = ExpenseService.list_all_purchasers(connection)
     selections = st.multiselect(
         "Show Spending For:", [*purchasers, "All"], default=purchasers
@@ -193,16 +193,16 @@ def render_update(connection: sqlite3.Connection) -> None:
     expense_id = st.selectbox(
         "Which Expense to Update?",
         expense_map.keys(),
-        format_func=lambda x: f"{expense_map[x].rowid} - by {expense_map[x].username} on {display_timestamp(expense_map[x].created_timestamp)}",
+        format_func=lambda x: f"{expense_map[x].rowid} {expense_map[x].comment} - by {expense_map[x].purchased_by} on {expense_map[x].purchased_date}",
     )
     expense_to_update = expense_map[expense_id]
     with st.form("update_form"):
         st.write("Update Purchase Info")
         price = st.number_input(
             "Price",
-            value=expense_to_update.price,
+            value=expense_to_update.price_in_cents,
             min_value=0,
-            max_value=1_000,
+            max_value=100_000,
             help="Enter the Price of the expense",
         )
         purchased_date = st.date_input(
@@ -212,7 +212,7 @@ def render_update(connection: sqlite3.Connection) -> None:
         )
 
         st.caption(
-            f"Expense #{expense_id} - by {expense_to_update.price} on {display_timestamp(expense_to_update.purchased_date)}"
+            f"Expense {expense_to_update.comment} #{expense_id} - by {expense_to_update.purchased_by} on {expense_to_update.purchased_date}"
         )
 
         submitted = st.form_submit_button(
@@ -221,9 +221,11 @@ def render_update(connection: sqlite3.Connection) -> None:
         )
         if submitted:
             new_expense = Expense(
-                purchased_date,
-                price,
-                expense_to_update.rowid,
+                price_in_cents=price,
+                purchased_date=purchased_date,
+                purchased_by=expense_to_update.purchased_by,
+                comment=expense_to_update.comment,
+                rowid=expense_to_update.rowid,
             )
             do_update(connection, new_expense)
 

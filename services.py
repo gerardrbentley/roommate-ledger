@@ -13,6 +13,7 @@ def create_expenses_table(connection: sqlite3.Connection) -> None:
     init_expenses_query = f"""CREATE TABLE IF NOT EXISTS expenses(
    purchased_date VARCHAR(10) NOT NULL,
    purchased_by VARCHAR(120) NOT NULL,
+   comment VARCHAR(120),
    price_in_cents INT NOT NULL);"""
     execute_query(connection, init_expenses_query)
 
@@ -28,10 +29,11 @@ def seed_expenses_table(connection: sqlite3.Connection) -> None:
                 random.randint(2020, 2022), random.randint(1, 12), random.randint(1, 28)
             ).strftime("%Y-%m-%d"),
             purchased_by=random.choice(["Alice", "Bob", "Chuck"]),
+            comment=random.choice(('Computer Parts 💻', 'Neatflicks Subscription 🍿', 'Food 🍜', '"Food" 🍻')),
             price_in_cents=random.randint(50, 100_00),
         )
-        seed_expense_query = f"""REPLACE into expenses(rowid, purchased_date, purchased_by, price_in_cents)
-        VALUES(:rowid, :purchased_date, :purchased_by, :price_in_cents);"""
+        seed_expense_query = f"""REPLACE into expenses(rowid, purchased_date, purchased_by, price_in_cents, comment)
+        VALUES(:rowid, :purchased_date, :purchased_by, :price_in_cents, :comment);"""
         execute_query(connection, seed_expense_query, seed_expense.dict())
 
 
@@ -67,7 +69,7 @@ class ExpenseService:
     ) -> List[sqlite3.Row]:
         """Returns rows from all expenses. Ordered in reverse creation order"""
         select = (
-            "SELECT rowid, purchased_date, purchased_by, price_in_cents FROM expenses"
+            "SELECT rowid, purchased_date, purchased_by, price_in_cents, comment FROM expenses"
         )
         where = ""
         do_and = False
@@ -100,13 +102,13 @@ class ExpenseService:
 
     def create_expense(connection: sqlite3.Connection, expense: BaseExpense) -> None:
         """Create a Expense in the database"""
-        create_expense_query = f"""INSERT into expenses(purchased_date, purchased_by, price_in_cents)
-    VALUES(:purchased_date, :purchased_by, :price_in_cents);"""
+        create_expense_query = f"""INSERT into expenses(purchased_date, purchased_by, price_in_cents, comment)
+    VALUES(:purchased_date, :purchased_by, :price_in_cents, :comment);"""
         execute_query(connection, create_expense_query, expense.dict())
 
     def update_expense(connection: sqlite3.Connection, expense: Expense) -> None:
         """Replace a Expense in the database"""
-        update_expense_query = f"""UPDATE expenses SET purchased_date=:purchased_date, purchased_by=:purchased_by, price=:price WHERE rowid=:rowid;"""
+        update_expense_query = f"""UPDATE expenses SET purchased_date=:purchased_date, purchased_by=:purchased_by, price_in_cents=:price_in_cents, comment=:comment WHERE rowid=:rowid;"""
         execute_query(connection, update_expense_query, expense.dict())
 
     def delete_expense(connection: sqlite3.Connection, expense: Expense) -> None:
