@@ -25,7 +25,7 @@ def render_expense(expense: Expense) -> None:
     """Show a expense with streamlit display functions"""
     st.subheader(f"{expense.comment} By {expense.purchased_by} at {expense.purchased_date}")
     st.caption(f"Expense #{expense.rowid}")
-    st.write(f"{expense.price_in_cents / 100 :.2f}")
+    st.write(f"${expense.price_in_cents / 100 :.2f}")
 
 
 def do_create(connection: sqlite3.Connection, expense: BaseExpense) -> None:
